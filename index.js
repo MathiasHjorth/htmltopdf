@@ -1,106 +1,85 @@
 import puppeteer from 'puppeteer';
-import fs from 'node:fs';
+// import workers from 'node:worker_threads';
 
-
-// const htmlData = {data: ""};
-// GetHtml();
-Begin();
+await Begin();
 
 //headless:shell er mere performant, når vi launcher browseren.
-//Det der skal ændres styling mæssigt:
-
-      //Hver page-sideX
-          //eavis-page styling klassen:
-              //overskriv alle margins til 0
-              //overskriv max-width til 100%
-              //Sæt scale 1.0
-
-// function GetHtml(){
-//    htmlData.data = fs.readFileSync("./htmlcontent.txt", {encoding: "utf8"})
-// }
 
 
 async function Begin(){
-
-  const eavisLength = 3
   const nextPageButtonSelector = "#screenNext";
-  const pageSelector = "#page-Side" //add pagenumber without whitespace
+  const pageIdSelector = "#page-Side"; //add pagenumber without whitespace
+  const pageClassSelector = ".eavis-page";
 
 
-  const browser = await puppeteer.launch({headless: false, slowMo: 1000});
+  const browser = await puppeteer.launch({headless: true});
   const page = await browser.newPage();
 
-  await page.setViewport({width: 794, height: 1123, deviceScaleFactor: 1});
-  
+  await page.setViewport({width: 1920, height: 1080, deviceScaleFactor: 1});
 
+  console.log("Navigating")
   const [response] = await Promise.all([
     //wait untill all external files like images, scripts etc. requested by the page have been loaded
     page.waitForNavigation({waitUntil:'load'}),
-    page.goto('https://lokalnytmiddelfart.dk/e-avis/')
-  ])
+    page.goto('https://alpha.lokal-nyt.dk/e-avis/')
+  ]);
 
+  console.log("Setting media type")
+  await page.emulateMediaType('print')
+
+
+  const eavisLength = await GetEavisLength(page, pageClassSelector);
   for(let pageNumber = 1; pageNumber < eavisLength; pageNumber++)
   {
-
-    //Algorithm:
-
-        //Edit style of page with javascript
-          //Determine if page has background image
-            //Get the style attribute, discard everything in the style attribute except the image.
-            //Apply the eavis to pdf styling, to the style attribute along with the saved image
-          //Change class
-
-        //Generate PDF
-        //Next page
-        //Repeat until at the end of the eavis...
-
-    //Run a javascript function that changes the styling of the eavis page to match our pdf
-    await page.evaluate(() => {
-      const pageElement = document.querySelector("#page-Side1");
-      pageElement.setAttribute("style","background-image: url(https://lokalnytmiddelfart.dk/wp-content/uploads/2023/07/Gammel-Havn.jpg); display: block; margin-left:0px; margin-right:0px; max-width: 100%");
-      pageElement.setAttribute("class","eavis-page frontpage");
-    })
-    await GeneratePdf(page,String(pageSelector+pageNumber));
-    await NextPage(page,nextPageButtonSelector,String(pageSelector+pageNumber));
-
+    await MoveToNextPage(page,nextPageButtonSelector); 
+    await EnsurePageScale(page,String(pageIdSelector+pageNumber));
+    await GeneratePdf(page,String(pageIdSelector+pageNumber));
   }
 
   await browser.close();
 }
 
-async function NextPage(page,nextPageButtonSelector,currentPage){
-
-    await page.click(nextPageButtonSelector);
-    //table of contents page does not have any id selector unlike all other pages
-    //so ignore this page here
-    if(currentPage != 2){
-      try{
-        await page.waitForSelector(currentPage, {timeout: 3000});
-      }
-      catch(error){
-        console.log("Kunne ikke finde siden")
-      }
-    }
-
-}
-
 async function GeneratePdf(page,pdfName){
+    console.log("Generating PDF of page: "+pdfName);
     await page.pdf(
     {
-      path: pdfName+".pdf", 
+      path: "./LokalNytHorsensUge34/"+pdfName+"alpha.pdf", 
       printBackground: true, 
       displayHeaderFooter: false,
       format: "A4"
     });
+}
+
+async function MoveToNextPage(page,nextPageButtonSelector){
+    console.log("Moving on to next page");
+    await page.evaluate((nextPageButtonSelector) => {
+        const nextPageButton = document.querySelector(nextPageButtonSelector);
+        nextPageButton.click();
+      },nextPageButtonSelector)
+}
+
+async function EnsurePageScale(page,currentPage){
+
+  //Ensuring that the CSS transform property on the pages have applied to scale to 1x before generating a PDF
+  console.log("Ensuring page scale");
+  try{
+    await page.evaluate((currentPage) => {
+      let pageElement = document.querySelector(currentPage);
+      if(pageElement !== undefined && pageElement !== null)
+      {
+        let inlineStyleOfElement = pageElement.getAttribute("style");
+        let newStyle = inlineStyleOfElement.slice(0,-1); //Removing the last single ' mark of the style attribute value
+        newStyle += "transition: none; transform: scale(1.0);'" //Overriding style attributes to ensure correct scaling for PDF generation
+        pageElement.setAttribute("style", newStyle);
+      }
+  },currentPage);
+  }catch(err)
+  {
+    console.log("Something went wrong trying to change the style attribute of element: "+currentPage+" Possible cause: Missing style attribute on the element");
   }
+}
 
-  function ChangeStyling(page, currentPage){
-
-    const eavisPageStyling = "background-image: url(&quot;https://lokalnytmiddelfart.dk/wp-content/uploads/2023/07/Gammel-Havn.jpg&quot;); display: block; margin-left:0px; margin-right:0px; max-width: 100%"
-
-    //Run a javascript function that changes the styling of the eavis page to match our pdf
-    page.evaluate(() => {
-      const pageElement = document.querySelector(currentPage);
-      pageElement.setAttribute("style",eavisPageStyling);
-    })
-  }
+async function GetEavisLength(page, pageClassSelector){
+   const result = await page.$$(pageClassSelector)
+   return result.length;
+}
